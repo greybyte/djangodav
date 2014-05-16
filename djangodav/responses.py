@@ -38,6 +38,12 @@ class ResponseException(Exception):
         super(ResponseException, self).__init__('Response excepted', *args, **kwargs)
         self.response = response
 
+class XMLResponse(HttpResponse):
+    def __init__(self, *args, **kwargs):
+        kwargs = kwargs or {}
+        kwargs['content_type'] = 'text/xml;charset="utf-8"'
+        super(XMLResponse, self).__init__(*args, **kwargs)
+
 
 class HttpResponsePreconditionFailed(HttpResponse):
     status_code = httplib.PRECONDITION_FAILED
@@ -47,7 +53,7 @@ class HttpResponseMediatypeNotSupported(HttpResponse):
     status_code = httplib.UNSUPPORTED_MEDIA_TYPE
 
 
-class HttpResponseMultiStatus(HttpResponse):
+class HttpResponseMultiStatus(XMLResponse):
     status_code = httplib.MULTI_STATUS
 
 
