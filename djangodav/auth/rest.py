@@ -32,19 +32,34 @@ class RestAuthViewMixIn(object):
     def dispatch(self, request, *args, **kwargs):
         if request.method.lower() != 'options':
             user_auth_tuple = None
+            authenticate_header = None
             for auth in self.authentications:
                 try:
-                    user_auth_tuple = auth.authenticate(request)
+                    class RequestWrapper(object):
+                        """ simulates django-rest-api request wrapper """
+                        def __init__(self, request):
+                            self._request = request
+                        def __getattr__(self, attr):
+                            return getattr(self._request, attr)
+
+                    user_auth_tuple = auth.authenticate(RequestWrapper(request))
+
+                    # did authentication succeed? if yes, don't try further
+                    if user_auth_tuple:
+                        break
+
+                    # store authenticate header, for later use
+                    if not authenticate_header:
+                        authenticate_header = auth.authenticate_header(request)
+
                 except APIException as e:
                     return HttpResponse(e.detail, status=e.status_code)
-                else:
-                    break
 
             if not user_auth_tuple is None:
                 user, auth = user_auth_tuple
             else:
                 resp = HttpResponseUnAuthorized("Not Authorised")
-                resp['WWW-Authenticate'] = self.authentications[0].authenticate_header(request)
+                resp['WWW-Authenticate'] = authenticate_header
                 return resp
 
             request.user = user
