@@ -45,13 +45,16 @@ class DavView(View):
             
         meta = request.META.get
         self.xbody = kwargs['xbody'] = None
-        if meta('CONTENT_TYPE', '').startswith('text/xml') and meta('CONTENT_LENGTH',0)!= '' and int(meta('CONTENT_LENGTH', 0)) > 0:
+        if (request.method.lower() != 'put'
+            and meta('CONTENT_TYPE', '').startswith('text/xml')
+            and meta('CONTENT_LENGTH',0)!= ''
+            and int(meta('CONTENT_LENGTH', 0)) > 0):
             self.xbody = kwargs['xbody'] = etree.XPathDocumentEvaluator(
                 etree.parse(request, etree.XMLParser(ns_clean=True)),
                 namespaces=WEBDAV_NSMAP
             )
 
-        if request.method.lower() in self.http_method_names:
+        if request.method.upper() in self._allowed_methods():
             handler = getattr(self, request.method.lower(), self.http_method_not_allowed)
         else:
             handler = self.http_method_not_allowed
@@ -61,9 +64,8 @@ class DavView(View):
             resp = e.response
         if not 'Allow' in resp:
             methods = self._allowed_methods()
-            if not methods:
-                return HttpResponseForbidden()
-            resp['Allow'] = ", ".join(methods)
+            if methods:
+                resp['Allow'] = ", ".join(methods)
         if not 'Date' in resp:
             resp['Date'] = rfc1123_date(now())
         if self.server_header:
@@ -84,13 +86,13 @@ class DavView(View):
         return response
 
     def _allowed_methods(self):
-        allowed = ['OPTIONS']
+        allowed = ['HEAD', 'OPTIONS']
         if not self.resource.exists:
-            res = self.resource.get_parent()
-            if not (res.is_collection and res.exists):
-                return None
+            parent = self.resource.get_parent()
+            if not (parent.is_collection and parent.exists):
+                return []
             return allowed + ['PUT', 'MKCOL']
-        allowed += ['HEAD', 'GET', 'DELETE', 'PROPFIND', 'PROPPATCH', 'COPY', 'MOVE', 'LOCK', 'UNLOCK']
+        allowed += ['GET', 'DELETE', 'PROPFIND', 'PROPPATCH', 'COPY', 'MOVE', 'LOCK', 'UNLOCK']
         if self.resource.is_object:
             allowed += ['PUT']
         return allowed
@@ -203,7 +205,7 @@ class DavView(View):
         if self.resource.is_collection:
             return HttpResponseForbidden()
         if not self.resource.exists and not self.has_access(parent, 'write'):
-                return HttpResponseForbidden()
+            return HttpResponseForbidden()
         if self.resource.exists and not self.has_access(self.resource, 'write'):
             return HttpResponseForbidden()
         created = not self.resource.exists
@@ -378,7 +380,7 @@ class DavView(View):
         if get_prop_names:
             responses = [
                 D.response(
-                    D.href(url_join(self.base_url, child.get_path())),
+                    D.href(url_join(self.base_url, child.get_escaped_path())),
                     D.propstat(
                         D.prop(*[
                             D(name) for name in child.ALL_PROPS
@@ -391,7 +393,7 @@ class DavView(View):
         else:
             responses = [
                 D.response(
-                    D.href(url_join(self.base_url, child.get_path())),
+                    D.href(url_join(self.base_url, child.get_escaped_path())),
                     D.propstat(
                         D.prop(
                             *get_property_tag_list(child, *(get_prop if get_prop else child.ALL_PROPS))
