@@ -19,6 +19,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with DjangoDav.  If not, see <http://www.gnu.org/licenses/>.
 from operator import and_
+from functools import reduce
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Q
 from django.utils.functional import cached_property
@@ -37,6 +38,12 @@ class BaseDBDavResource(BaseDavResource):
     name_attribute = 'name'
     size_attribute = 'size'
 
+    collection_select_related = tuple()
+    object_select_related = tuple()
+
+    collection_prefetch_related = tuple()
+    object_prefetch_related = tuple()
+
     def __init__(self, path, **kwargs):
         if 'obj' in kwargs:  # Accepting ready object to reduce db requests
             self.__dict__['obj'] = kwargs.pop('obj')
@@ -44,7 +51,7 @@ class BaseDBDavResource(BaseDavResource):
 
     @cached_property
     def obj(self):
-        raise NotImplemented()
+        raise NotImplementedError
 
     @property
     def getcontentlength(self):
@@ -72,27 +79,39 @@ class BaseDBDavResource(BaseDavResource):
     def exists(self):
         return self.is_root or bool(self.obj)
 
+    def get_model_lookup_kwargs(self, **kwargs):
+        return self.get_model_kwargs(**kwargs)
+
     def get_model_kwargs(self, **kwargs):
-        return kwargs or {}
+        return kwargs
 
     def get_children(self):
         """Return an iterator of all direct children of this resource."""
         if not self.exists or isinstance(self.obj, self.object_model):
             return
 
-        for model in [self.collection_model, self.object_model]:
-            kwargs = self.get_model_kwargs(**{self.collection_attribute: self.obj})
-            for child in model.objects.filter(**kwargs):
+        models = [
+            [self.collection_model, self.collection_select_related, self.collection_prefetch_related],
+            [self.object_model, self.object_select_related, self.object_prefetch_related]
+        ]
+        for model, select_related, prefetch_related in models:
+            qs = model.objects
+            if select_related:
+                qs = qs.select_related(*select_related)
+            if prefetch_related:
+                qs = qs.prefetch_related(*prefetch_related)
+            kwargs = self.get_model_lookup_kwargs(**{self.collection_attribute: self.obj})
+            for child in qs.filter(**kwargs):
                 yield self.clone(
                     url_join(*(self.path + [child.name])),
                     obj=child    # Sending ready object to reduce db requests
                 )
 
     def read(self):
-        raise NotImplemented
+        raise NotImplementedError
 
     def write(self, content):
-        raise NotImplemented
+        raise NotImplementedError
 
     def delete(self):
         if not self.obj:
@@ -108,12 +127,10 @@ class NameLookupDBDavMixIn(object):
         super(NameLookupDBDavMixIn, self).__init__(path, **kwargs)
 
     def get_object(self):
-        parent = self.get_model_by_path(self.collection_model, *self.path[:-1])
-        qs = self.object_model.objects.select_related(self.collection_attribute)
-        return qs.get(**{self.collection_attribute: parent, 'name': self.path[-1]})
+        return self.get_model_by_path('object', self.path)
 
     def get_collection(self):
-        return self.get_model_by_path(self.collection_model, *self.path)
+        return self.get_model_by_path('collection', self.path)
 
     def create_collection(self):
         name = self.path[-1]
@@ -126,7 +143,7 @@ class NameLookupDBDavMixIn(object):
         if not self.path:
             return None
 
-        if not self.possible_collection:  # Reducing queries
+        if self.possible_collection:  # Reducing queries
             attempts = [self.get_collection, self.get_object]
         else:
             attempts = [self.get_object, self.get_collection]
@@ -137,7 +154,7 @@ class NameLookupDBDavMixIn(object):
             except ObjectDoesNotExist:
                 continue
 
-    def get_model_by_path(self, model, *path):
+    def get_model_by_path(self, model_attr, path):
         if not path:
             return None
 
@@ -146,16 +163,22 @@ class NameLookupDBDavMixIn(object):
         for part in reversed(path):
             args.append(Q(**{"__".join(([self.collection_attribute] * i) + [self.name_attribute]): part}))
             i += 1
-        args.append(Q(**{"__".join([self.collection_attribute] * len(path)): None}))
-        related = ["__".join([self.collection_attribute] * i) for i in range(1, len(path))]
+        qs = getattr(self, "%s_model" % model_attr).objects.filter(**self.get_model_lookup_kwargs())
 
-        qs = model.objects.filter(**self.get_model_kwargs())
-        if related:
-            qs = qs.select_related(*related)
+        select_related = ["__".join([self.collection_attribute] * i) for i in range(1, len(path))]
+        select_related += getattr(self, "%s_select_related" % model_attr)
+        if select_related:
+            qs = qs.select_related(*select_related)
+
+        prefetch_related = getattr(self, "%s_prefetch_related" % model_attr)
+        if prefetch_related:
+            qs = qs.prefetch_related(*prefetch_related)
+
+        args.append(Q(**{"__".join([self.collection_attribute] * len(path)): None}))
         try:
             return qs.filter(reduce(and_, args))[0]
         except IndexError:
-            raise model.DoesNotExist()
+            raise qs.model.DoesNotExist()
 
     def copy_object(self, destination):
         self.obj.pk = None

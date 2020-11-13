@@ -3,6 +3,8 @@ DjangoDav
 
 Production ready WebDav extension for Django.
 
+.. image:: https://travis-ci.org/meteozond/djangodav.svg
+
 Motivation
 ----------
 
@@ -50,8 +52,8 @@ How to create simple filesystem webdav resource
 .. code:: python
 
     from django.conf import settings
-    from djangodav.base.resource import MetaEtagMixIn
-    from djangodav.fs.resource import DummyFSDAVResource
+    from djangodav.base.resources import MetaEtagMixIn
+    from djangodav.fs.resources import DummyFSDAVResource
 
     class MyDavResource(MetaEtagMixIn, DummyFSDAVResource):
         root = '/path/to/folder'
@@ -62,13 +64,13 @@ How to create simple filesystem webdav resource
 
 .. code:: python
 
-    from djangodav.acl import FullAcl
-    from djangodav.lock import DummyLock
+    from djangodav.acls import FullAcl
+    from djangodav.locks import DummyLock
     from djangodav.views import DavView
 
     from django.conf.urls import patterns
 
-    from .resource import TempDirWebDavResource
+    from .resource import MyDavResource
 
     urlpatterns = patterns('',
         (r'^fsdav(?P<path>.*)$', DavView.as_view(resource_class=MyDavResource, lock_class=DummyLock,

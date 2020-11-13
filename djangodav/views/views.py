@@ -1,26 +1,31 @@
-import mimetypes, urllib, urlparse, re
+import urllib, re
+import sys
+try:
+    import urlparse
+except ImportError:
+    from urllib import parse as urlparse
 from sys import version_info as python_version
-from django.utils.timezone import now
 from lxml import etree
 
-from django.http import HttpResponse, HttpResponseForbidden, HttpResponseNotFound, HttpResponseNotAllowed, HttpResponseBadRequest, \
-    HttpResponseNotModified, HttpResponseRedirect
+from django.utils.encoding import force_text
+from django.utils.timezone import now
+from django.http import HttpResponseForbidden, HttpResponseNotAllowed, HttpResponseBadRequest, \
+    HttpResponseNotModified, HttpResponseRedirect, Http404
 from django.utils.decorators import method_decorator
 from django.utils.functional import cached_property
 from django.utils.http import parse_etags
-from django.shortcuts import render_to_response
+from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import View
 
 from djangodav.responses import ResponseException, HttpResponsePreconditionFailed, HttpResponseCreated, HttpResponseNoContent, \
-    HttpResponseConflict, HttpResponseMediatypeNotSupported, HttpResponseBadGateway, HttpResponseNotImplemented, \
-    HttpResponseMultiStatus, HttpResponseLocked
+    HttpResponseConflict, HttpResponseMediatypeNotSupported, HttpResponseBadGateway, \
+    HttpResponseMultiStatus, HttpResponseLocked, HttpResponse
 from djangodav.utils import WEBDAV_NSMAP, D, url_join, get_property_tag_list, rfc1123_date
 from djangodav import VERSION as djangodav_version
 from django import VERSION as django_version, get_version
 
 PATTERN_IF_DELIMITER = re.compile(r'(<([^>]+)>)|(\(([^\)]+)\))')
-
 
 class DavView(View):
     resource_class = None
@@ -33,6 +38,11 @@ class DavView(View):
         get_version(django_version),
         get_version(python_version)
     )
+    xml_pretty_print = False
+    xml_encoding = 'utf-8'
+
+    def no_access(self):
+        return HttpResponseForbidden()
 
     @method_decorator(csrf_exempt)
     def dispatch(self, request, path, *args, **kwargs):
@@ -42,12 +52,12 @@ class DavView(View):
         else:
             self.path = '/'
             self.base_url = request.META['PATH_INFO']
-            
+
         meta = request.META.get
         self.xbody = kwargs['xbody'] = None
         if (request.method.lower() != 'put'
-            and meta('CONTENT_TYPE', '').startswith('text/xml')
-            and meta('CONTENT_LENGTH',0)!= ''
+            and "/xml" in meta('CONTENT_TYPE', '')
+            and meta('CONTENT_LENGTH', 0) != ''
             and int(meta('CONTENT_LENGTH', 0)) > 0):
             self.xbody = kwargs['xbody'] = etree.XPathDocumentEvaluator(
                 etree.parse(request, etree.XMLParser(ns_clean=True)),
@@ -60,7 +70,7 @@ class DavView(View):
             handler = self.http_method_not_allowed
         try:
             resp = handler(request, self.path, *args, **kwargs)
-        except ResponseException, e:
+        except ResponseException as e:
             resp = e.response
         if not 'Allow' in resp:
             methods = self._allowed_methods()
@@ -74,8 +84,8 @@ class DavView(View):
 
     def options(self, request, path, *args, **kwargs):
         if not self.has_access(self.resource, 'read'):
-            return HttpResponseForbidden()
-        response = HttpResponse(content_type='text/html')
+            return self.no_access()
+        response = self.build_xml_response()
         response['DAV'] = '1,2'
         response['Content-Length'] = '0'
         if self.path in ('/', '*'):
@@ -86,15 +96,11 @@ class DavView(View):
         return response
 
     def _allowed_methods(self):
-        allowed = ['HEAD', 'OPTIONS']
-        if not self.resource.exists:
-            parent = self.resource.get_parent()
-            if not (parent.is_collection and parent.exists):
-                return []
-            return allowed + ['PUT', 'MKCOL']
-        allowed += ['GET', 'DELETE', 'PROPFIND', 'PROPPATCH', 'COPY', 'MOVE', 'LOCK', 'UNLOCK']
-        if self.resource.is_object:
-            allowed += ['PUT']
+        allowed = [
+            'HEAD', 'OPTIONS', 'PROPFIND', 'LOCK', 'UNLOCK',
+            'GET', 'DELETE', 'PROPPATCH', 'COPY', 'MOVE', 'PUT', 'MKCOL',
+        ]
+
         return allowed
 
     def get_access(self, resource):
@@ -116,7 +122,7 @@ class DavView(View):
     def get_resource(self, **kwargs):
         return self.resource_class(**self.get_resource_kwargs(**kwargs))
 
-    def get_depth(self, default='infinity'):
+    def get_depth(self, default='1'):
         depth = str(self.request.META.get('HTTP_DEPTH', default)).lower()
         if not depth in ('0', '1', 'infinity'):
             raise ResponseException(HttpResponseBadRequest('Invalid depth header value %s' % depth))
@@ -171,27 +177,24 @@ class DavView(View):
 
     def get(self, request, path, head=False, *args, **kwargs):
         if not self.resource.exists:
-            return HttpResponseNotFound()
+            raise Http404("Resource doesn't exists")
         if not path.endswith("/") and self.resource.is_collection:
             return HttpResponseRedirect(request.build_absolute_uri() + "/")
         if path.endswith("/") and self.resource.is_object:
             return HttpResponseRedirect(request.build_absolute_uri().rstrip("/"))
         response = HttpResponse()
-        response['Content-Length'] = 0
-        acl = self.get_access(self.resource)
+        if head:
+            response['Content-Length'] = 0
+        if not self.has_access(self.resource, 'read'):
+            return self.no_access()
         if self.resource.is_object:
-            if not acl.read:
-                return HttpResponseForbidden()
+            response['Content-Type'] = self.resource.content_type
+            response['ETag'] = self.resource.getetag
             if not head:
                 response['Content-Length'] = self.resource.getcontentlength
                 response.content = self.resource.read()
-            response['Content-Type'] = self.resource.content_type
-            response['ETag'] = self.resource.getetag
-        else:
-            if not acl.read:
-                return HttpResponseForbidden()
-            if not head:
-                response = render_to_response(self.template_name, {'res': self.resource, 'base_url': self.base_url})
+        elif not head:
+            response = render(request, self.template_name, dict(resource=self.resource, base_url=self.base_url))
         response['Last-Modified'] = self.resource.getlastmodified
         return response
 
@@ -201,13 +204,13 @@ class DavView(View):
     def put(self, request, path, *args, **kwargs):
         parent = self.resource.get_parent()
         if not parent.exists:
-            return HttpResponseNotFound()
+            return HttpResponseConflict("Resource doesn't exists")
         if self.resource.is_collection:
-            return HttpResponseForbidden()
+            return HttpResponseNotAllowed(list(set(self._allowed_methods()) - set(['MKCOL', 'PUT'])))
         if not self.resource.exists and not self.has_access(parent, 'write'):
-            return HttpResponseForbidden()
+            return self.no_access()
         if self.resource.exists and not self.has_access(self.resource, 'write'):
-            return HttpResponseForbidden()
+            return self.no_access()
         created = not self.resource.exists
         self.resource.write(request)
         if created:
@@ -218,9 +221,9 @@ class DavView(View):
 
     def delete(self, request, path, *args, **kwargs):
         if not self.resource.exists:
-            return HttpResponseNotFound()
+            raise Http404("Resource doesn't exists")
         if not self.has_access(self.resource, 'delete'):
-            return HttpResponseForbidden()
+            return self.no_access()
         self.lock_class(self.resource).del_locks()
         self.resource.delete()
         response = HttpResponseNoContent()
@@ -229,24 +232,30 @@ class DavView(View):
 
     def mkcol(self, request, path, *args, **kwargs):
         if self.resource.exists:
-            return HttpResponseNotAllowed(self._allowed_methods())
+            return HttpResponseNotAllowed(list(set(self._allowed_methods()) - set(['MKCOL', 'PUT'])))
         if not self.resource.get_parent().exists:
             return HttpResponseConflict()
         length = request.META.get('CONTENT_LENGTH', 0)
         if length and int(length) != 0:
             return HttpResponseMediatypeNotSupported()
         if not self.has_access(self.resource, 'write'):
-            return HttpResponseForbidden()
+            return self.no_access()
         self.resource.create_collection()
         self.__dict__['resource'] = self.get_resource(path=self.resource.get_path())
         return HttpResponseCreated()
 
     def relocate(self, request, path, method, *args, **kwargs):
         if not self.resource.exists:
-            return HttpResponseNotFound()
+            raise Http404("Resource doesn't exists")
         if not self.has_access(self.resource, 'read'):
-            return HttpResponseForbidden()
-        dst = urllib.unquote(request.META.get('HTTP_DESTINATION', ''))
+            return self.no_access()
+        # dst = urlparse.unquote(request.META.get('HTTP_DESTINATION', '')).decode(self.xml_encoding)
+        if sys.version_info < (3, 0, 0): #py2
+            # in Python 2, urlparse requires bytestrings
+            dst = urlparse.unquote(request.META.get('HTTP_DESTINATION', '')).decode(self.xml_encoding)
+        else:
+            # in Python 3, urlparse understands string
+            dst = urlparse.unquote(request.META.get('HTTP_DESTINATION', ''))
         if not dst:
             return HttpResponseBadRequest('Destination header missing.')
         dparts = urlparse.urlparse(dst)
@@ -258,7 +267,7 @@ class DavView(View):
         if not dst.get_parent().exists:
             return HttpResponseConflict()
         if not self.has_access(self.resource, 'write'):
-            return HttpResponseForbidden()
+            return self.no_access()
         overwrite = request.META.get('HTTP_OVERWRITE', 'T')
         if overwrite not in ('T', 'F'):
             return HttpResponseBadRequest('Overwrite header must be T or F.')
@@ -272,7 +281,7 @@ class DavView(View):
             dst.delete()
         errors = getattr(self.resource, method)(dst, *args, **kwargs)
         if errors:
-            return HttpResponseMultiStatus() # WAT?
+            return self.build_xml_response(response_class=HttpResponseMultiStatus) # WAT?
         if dst_exists:
             return HttpResponseNoContent()
         return HttpResponseCreated()
@@ -285,13 +294,13 @@ class DavView(View):
 
     def move(self, request, path, xbody):
         if not self.has_access(self.resource, 'delete'):
-            return HttpResponseForbidden()
+            return self.no_access()
         return self.relocate(request, path, 'move')
 
     def lock(self, request, path, xbody=None, *args, **kwargs):
         # TODO Lock refreshing
         if not self.has_access(self.resource, 'write'):
-            return HttpResponseForbidden()
+            return self.no_access()
 
         if not xbody:
             return HttpResponseBadRequest('Lockinfo required')
@@ -338,34 +347,34 @@ class DavView(View):
         body = D.activelock(*([
             D.locktype(locktype_obj),
             D.lockscope(lockscope_obj),
-            D.depth(unicode(depth)),
+            D.depth(force_text(depth)),
             D.timeout("Second-%s" % timeout),
             D.locktoken(D.href('opaquelocktoken:%s' % token))]
-            + ([owner_obj] if not owner_obj is None else [])
+            + ([owner_obj] if owner_obj is not None else [])
         ))
 
-        return HttpResponse(etree.tostring(body, pretty_print=True, xml_declaration=True, encoding='utf-8'), content_type='application/xml')
+        return self.build_xml_response(body)
 
     def unlock(self, request, path, xbody=None, *args, **kwargss):
         if not self.has_access(self.resource, 'write'):
-            return HttpResponseForbidden()
+            return self.no_access()
 
         token = request.META.get('HTTP_LOCK_TOKEN')
         if not token:
             return HttpResponseBadRequest('Lock token required')
         if not self.lock_class(self.resource).release(token):
-            return HttpResponseForbidden()
+            return self.no_access()
         return HttpResponseNoContent()
 
     def propfind(self, request, path, xbody=None, *args, **kwargs):
         if not self.has_access(self.resource, 'read'):
-            return HttpResponseForbidden()
+            return self.no_access()
 
         if not self.resource.exists:
-            return HttpResponseNotFound()
+            raise Http404("Resource doesn't exists")
 
         if not self.get_access(self.resource):
-            return HttpResponseForbidden()
+            return self.no_access()
 
         get_all_props, get_prop, get_prop_names = True, False, False
         if xbody:
@@ -375,7 +384,7 @@ class DavView(View):
             if int(bool(get_prop)) + int(bool(get_all_props)) + int(bool(get_prop_names)) != 1:
                 return HttpResponseBadRequest()
 
-        children = self.resource.get_descendants(depth=self.get_depth(), include_self=True)
+        children = self.resource.get_descendants(depth=self.get_depth())
 
         if get_prop_names:
             responses = [
@@ -405,15 +414,40 @@ class DavView(View):
             ]
 
         body = D.multistatus(*responses)
-        response = HttpResponseMultiStatus(etree.tostring(body, pretty_print=True, xml_declaration=True, encoding='utf-8'))
-        return response
+        return self.build_xml_response(body, HttpResponseMultiStatus)
 
-    def proppatch(self, request, path, *args, **kwargs):
+    def proppatch(self, request, path, xbody, *args, **kwargs):
         if not self.resource.exists:
-            return HttpResponseNotFound()
+            raise Http404("Resource doesn't exists")
         if not self.has_access(self.resource, 'write'):
-            return HttpResponseForbidden()
+            return self.no_access()
         depth = self.get_depth(default="0")
         if depth != 0:
             return HttpResponseBadRequest('Invalid depth header value %s' % depth)
-        return HttpResponseNotImplemented()
+        props = xbody('/D:propertyupdate/D:set/D:prop/*')
+        body = D.multistatus(
+            D.response(
+                D.href(url_join(self.base_url, self.resource.get_escaped_path())),
+                *[D.propstat(
+                    D.status('HTTP/1.1 200 OK'),
+                    D.prop(el.tag)
+                ) for el in props]
+            )
+        )
+        return self.build_xml_response(body, HttpResponseMultiStatus)
+
+    def build_xml_response(self, tree=None, response_class=HttpResponse, **kwargs):
+        if tree is not None:
+            content = etree.tostring(
+                tree,
+                xml_declaration=True,
+                pretty_print=self.xml_pretty_print,
+                encoding=self.xml_encoding
+            )
+        else:
+            content = b''
+        return response_class(
+            content,
+            content_type='text/xml; charset="%s"' % self.xml_encoding,
+            **kwargs
+        )

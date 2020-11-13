@@ -1,3 +1,4 @@
 django
-django-tastipie
+django-tastypie
 djangorestframework
+lxml

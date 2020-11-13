@@ -23,6 +23,9 @@
 import datetime, time, calendar
 from wsgiref.handlers import format_date_time
 
+from django.utils.encoding import force_text
+from django.utils.feedgenerator import rfc2822_date
+
 try:
     from email.utils import parsedate_tz
 except ImportError:
@@ -59,8 +62,8 @@ def get_property_tag(res, name):
             return D(name, D.collection)
         return D(name)
     try:
-        if getattr(res, name):
-            return D(name, unicode(getattr(res, name)))
+        if hasattr(res, name):
+            return D(name, force_text(getattr(res, name)))
     except AttributeError:
         return
 
@@ -101,19 +104,16 @@ def ns_join(ns, name):
     return '{%s:}%s' % (ns, name)
 
 
-def rfc3339_date(date):
-    if not date:
+def rfc3339_date(dt):
+    if not dt:
         return ''
-    if not isinstance(date, datetime.date):
-        date = datetime.date.fromtimestamp(date)
-    date = date + datetime.timedelta(seconds=-time.timezone)
-    if time.daylight:
-        date += datetime.timedelta(seconds=time.altzone)
-    return date.strftime('%Y-%m-%dT%H:%M:%SZ')
+    return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
-def rfc1123_date(date):
-    return format_date_time(time.mktime(date.timetuple()))
+def rfc1123_date(dt):
+    if not dt:
+        return ''
+    return rfc2822_date(dt)
 
 
 def parse_time(timestring):
@@ -121,13 +121,13 @@ def parse_time(timestring):
     for fmt in (FORMAT_RFC_822, FORMAT_RFC_850, FORMAT_ASC):
         try:
             value = time.strptime(timestring, fmt)
-        except:
+        except ValueError:
             pass
     if value is None:
         try:
             # Sun Nov  6 08:49:37 1994 +0100      ; ANSI C's asctime() format with timezone
             value = parsedate_tz(timestring)
-        except:
+        except ValueError:
             pass
     if value is None:
         return

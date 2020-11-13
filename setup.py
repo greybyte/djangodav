@@ -24,12 +24,9 @@
 from setuptools import setup, find_packages
 
 
-version = __import__('djangodav').get_version()
-
-
 setup(
     name='DjangoDav',
-    version=version,
+    version=__import__('djangodav').__version__,
     description=('A WebDAV server for Django.'),
     long_description = open('README.rst').read(),
     author='Alexander Klimenko',
@@ -43,6 +40,9 @@ setup(
         'License :: OSI Approved :: GNU Affero General Public License v3',
         'Operating System :: OS Independent',
         'Programming Language :: Python',
+        "Programming Language :: Python :: 2.7",
+        "Programming Language :: Python :: 2.6",
+        "Programming Language :: Python :: 3.4",
         'Topic :: Software Development :: Libraries :: Python Modules'
     ],
     install_requires=["lxml", "Django>=1.3.0"],

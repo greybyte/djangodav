@@ -80,16 +80,21 @@ class BaseFSDavResource(BaseDavResource):
 
     def get_children(self):
         """Return an iterator of all direct children of this resource."""
-        for child in os.listdir(self.get_abs_path()):
-            if not isinstance(child, unicode):
-                child = child.decode(fs_encoding)
-            yield self.clone(url_join(*(self.path + [child])))
+        if os.path.isdir(self.get_abs_path()):
+            for child in os.listdir(self.get_abs_path()):
+                try:
+                    is_unicode = isinstance(child, unicode)
+                except NameError:  # Python 3 fix
+                    is_unicode = isinstance(child, str)
+                if not is_unicode:
+                    child = child.decode(fs_encoding)
+                yield self.clone(url_join(*(self.path + [child])))
 
     def write(self, content):
-        raise NotImplemented
+        raise NotImplementedError
 
     def read(self):
-        raise NotImplemented
+        raise NotImplementedError
 
     def delete(self):
         """Delete the resource, recursive is implied."""
@@ -113,17 +118,14 @@ class BaseFSDavResource(BaseDavResource):
 
 class DummyReadFSDavResource(BaseFSDavResource):
     def read(self):
-        f = open(self.get_abs_path(), 'r')
-        resp = f.read()
-        f.close()
-        return resp
+        with open(self.get_abs_path(), 'rb') as f:
+            return f.read()
 
 
 class DummyWriteFSDavResource(BaseFSDavResource):
     def write(self, request):
-        f = open(self.get_abs_path(), 'w')
-        f.write(request.read())
-        f.close()
+        with open(self.get_abs_path(), 'wb') as dst:
+            shutil.copyfileobj(request, dst)
 
 
 class DummyFSDAVResource(DummyReadFSDavResource, DummyWriteFSDavResource, BaseFSDavResource):

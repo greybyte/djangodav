@@ -22,7 +22,20 @@ from django.http import HttpResponse
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from djangodav.responses import HttpResponseUnAuthorized
-from rest_framework.exceptions import APIException
+
+try:
+    import rest_framework
+    from rest_framework.exceptions import APIException
+except ImportError:
+    rest_framework = None
+
+
+class RequestWrapper(object):
+    """ simulates django-rest-api request wrapper """
+    def __init__(self, request):
+        self._request = request
+    def __getattr__(self, attr):
+        return getattr(self._request, attr)
 
 
 class RestAuthViewMixIn(object):
@@ -30,32 +43,22 @@ class RestAuthViewMixIn(object):
 
     @method_decorator(csrf_exempt)
     def dispatch(self, request, *args, **kwargs):
+        assert rest_framework is not None, "django rest framework is not installed."
         if request.method.lower() != 'options':
             user_auth_tuple = None
             authenticate_header = None
             for auth in self.authentications:
                 try:
-                    class RequestWrapper(object):
-                        """ simulates django-rest-api request wrapper """
-                        def __init__(self, request):
-                            self._request = request
-                        def __getattr__(self, attr):
-                            return getattr(self._request, attr)
-
                     user_auth_tuple = auth.authenticate(RequestWrapper(request))
-
-                    # did authentication succeed? if yes, don't try further
-                    if user_auth_tuple:
-                        break
-
-                    # store authenticate header, for later use
-                    if not authenticate_header:
-                        authenticate_header = auth.authenticate_header(request)
-
                 except APIException as e:
                     return HttpResponse(e.detail, status=e.status_code)
+                else:
+                    if user_auth_tuple is None:
+                        continue # try next authenticator
+                    else:
+                        break    # we got auth, so stop trying
 
-            if not user_auth_tuple is None:
+            if user_auth_tuple is not None:
                 user, auth = user_auth_tuple
             else:
                 resp = HttpResponseUnAuthorized("Not Authorised")

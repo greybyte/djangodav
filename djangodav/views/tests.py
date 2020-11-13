@@ -18,8 +18,9 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with DjangoDav.  If not, see <http://www.gnu.org/licenses/>.
+import sys
 from lxml.etree import ElementTree
-from django.http import HttpResponse, HttpRequest
+from django.http import HttpResponse, HttpRequest, Http404
 from djangodav.acls import FullAcl
 from djangodav.locks import DummyLock
 from djangodav.responses import ResponseException
@@ -91,14 +92,13 @@ class TestView(TestCase):
         r = DavView(path=path, acl_class=FullAcl)
         r.__dict__['resource'] = MissingMockCollection(path)
         request = Mock(META={'SERVERNANE': 'testserver'}, build_absolute_uri=Mock(return_value=path))
-        resp = r.get(request, path, 'xbody')
-        self.assertEqual(resp.status_code, 404)
+        self.assertRaises(Http404, r.get, request, path, 'xbody')
 
     def test_propfind_listing(self):
         self.top_collection.get_descendants.return_value += [self.top_collection]
         request = Mock(META={})
         path = '/collection/'
-        v = DavView(base_url='/base/', path=path, request=request, acl_class=FullAcl)
+        v = DavView(base_url='/base/', path=path, request=request, acl_class=FullAcl, xml_pretty_print=True)
         v.__dict__['resource'] = self.top_collection
         resp = v.propfind(request, path, None)
         self.assertEqual(resp.status_code, 207)
@@ -109,8 +109,8 @@ class TestView(TestCase):
                     D.propstat(
                         D.prop(
                             D.getcontentlength("42"),
-                            D.creationdate("1983-12-23T23:00:00Z"),
-                            D.getlastmodified("Wed, 24 Dec 2014 06:00:00 GMT"),
+                            D.creationdate("1983-12-24T06:00:00Z"),
+                            D.getlastmodified("Wed, 24 Dec 2014 06:00:00 +0000"),
                             D.resourcetype(),
                             D.displayname("sub_object"),
                         ),
@@ -122,8 +122,8 @@ class TestView(TestCase):
                     D.propstat(
                         D.prop(
                             D.getcontentlength("0"),
-                            D.creationdate("1983-12-23T23:00:00Z"),
-                            D.getlastmodified("Wed, 24 Dec 2014 06:00:00 GMT"),
+                            D.creationdate("1983-12-24T06:00:00Z"),
+                            D.getlastmodified("Wed, 24 Dec 2014 06:00:00 +0000"),
                             D.resourcetype(D.collection()),
                             D.displayname("sub_colection"),
                         ),
@@ -135,8 +135,8 @@ class TestView(TestCase):
                     D.propstat(
                         D.prop(
                             D.getcontentlength("0"),
-                            D.creationdate("1983-12-23T23:00:00Z"),
-                            D.getlastmodified("Wed, 24 Dec 2014 06:00:00 GMT"),
+                            D.creationdate("1983-12-24T06:00:00Z"),
+                            D.getlastmodified("Wed, 24 Dec 2014 06:00:00 +0000"),
                             D.resourcetype(D.collection()),
                             D.displayname("collection"),
                         ),
@@ -150,7 +150,7 @@ class TestView(TestCase):
         self.sub_object.get_descendants.return_value += [self.sub_object]
         request = Mock(META={})
         path = 'collection/sub_object'
-        v = DavView(base_url='/base/', path=path, request=request, acl_class=FullAcl)
+        v = DavView(base_url='/base/', path=path, request=request, acl_class=FullAcl, xml_pretty_print=True)
         v.__dict__['resource'] = self.sub_object
         resp = v.propfind(request, path,
             etree.XPathDocumentEvaluator(ElementTree(
@@ -182,7 +182,7 @@ class TestView(TestCase):
         self.sub_object.get_descendants.return_value += [self.sub_object]
         request = Mock(META={})
         path = 'collection/sub_object'
-        v = DavView(base_url='/base/', path=path, request=request, acl_class=FullAcl)
+        v = DavView(base_url='/base/', path=path, request=request, acl_class=FullAcl, xml_pretty_print=True)
         v.__dict__['resource'] = self.sub_object
         resp = v.propfind(request, path,
             etree.XPathDocumentEvaluator(ElementTree(
@@ -199,8 +199,8 @@ class TestView(TestCase):
                     D.propstat(
                         D.prop(
                             D.getcontentlength("42"),
-                            D.creationdate("1983-12-23T23:00:00Z"),
-                            D.getlastmodified("Wed, 24 Dec 2014 06:00:00 GMT"),
+                            D.creationdate("1983-12-24T06:00:00Z"),
+                            D.getlastmodified("Wed, 24 Dec 2014 06:00:00 +0000"),
                             D.resourcetype(),
                             D.displayname("sub_object"),
                         ),
@@ -215,7 +215,7 @@ class TestView(TestCase):
         self.sub_object.get_descendants.return_value += [self.sub_object]
         request = Mock(META={})
         path = 'collection/sub_object'
-        v = DavView(base_url='/base/', path=path, request=request, acl_class=FullAcl)
+        v = DavView(base_url='/base/', path=path, request=request, acl_class=FullAcl, xml_pretty_print=True)
         v.__dict__['resource'] = self.sub_object
         resp = v.propfind(request, path,
             etree.XPathDocumentEvaluator(ElementTree(
@@ -263,24 +263,24 @@ class TestView(TestCase):
     def test_allowed_object(self):
         v = DavView()
         v.__dict__['resource'] = self.sub_object
-        self.assertEqual(v._allowed_methods(), ['OPTIONS', 'HEAD', 'GET', 'DELETE', 'PROPFIND', 'PROPPATCH', 'COPY', 'MOVE', 'LOCK', 'UNLOCK', 'PUT'])
+        self.assertListEqual(v._allowed_methods(), ['HEAD', 'OPTIONS', 'PROPFIND', 'LOCK', 'UNLOCK', 'GET', 'DELETE', 'PROPPATCH', 'COPY', 'MOVE', 'PUT', 'MKCOL'])
 
     def test_allowed_collection(self):
         v = DavView()
         v.__dict__['resource'] = self.top_collection
-        self.assertEqual(v._allowed_methods(), ['OPTIONS', 'HEAD', 'GET', 'DELETE', 'PROPFIND', 'PROPPATCH', 'COPY', 'MOVE', 'LOCK', 'UNLOCK'])
+        self.assertListEqual(v._allowed_methods(), ['HEAD', 'OPTIONS', 'PROPFIND', 'LOCK', 'UNLOCK', 'GET', 'DELETE', 'PROPPATCH', 'COPY', 'MOVE', 'PUT', 'MKCOL'])
 
     def test_allowed_missing_collection(self):
         v = DavView()
         parent = MockCollection('/path/to/obj')
         v.__dict__['resource'] = MissingMockCollection('/path/', get_parent=Mock(return_value=parent))
-        self.assertEqual(v._allowed_methods(), ['OPTIONS', 'PUT', 'MKCOL'])
+        self.assertListEqual(v._allowed_methods(), ['HEAD', 'OPTIONS', 'PROPFIND', 'LOCK', 'UNLOCK', 'GET', 'DELETE', 'PROPPATCH', 'COPY', 'MOVE', 'PUT', 'MKCOL'])
 
     def test_allowed_missing_parent(self):
         v = DavView()
         parent = MissingMockCollection('/path/to/obj')
         v.__dict__['resource'] = MissingMockCollection('/path/', get_parent=Mock(return_value=parent))
-        self.assertEqual(v._allowed_methods(), [])
+        self.assertListEqual(v._allowed_methods(), ['HEAD', 'OPTIONS', 'PROPFIND', 'LOCK', 'UNLOCK', 'GET', 'DELETE', 'PROPPATCH', 'COPY', 'MOVE', 'PUT', 'MKCOL'])
 
     def test_options_root(self):
         path = '/'
@@ -289,7 +289,7 @@ class TestView(TestCase):
         resp = v.options(None, path)
         self.assertEqual(sorted(resp.items()), [
             ('Content-Length', '0'),
-            ('Content-Type', 'text/html'),
+            ('Content-Type', 'text/xml; charset="utf-8"'),
             ('DAV', '1,2'),
         ])
 
@@ -302,7 +302,7 @@ class TestView(TestCase):
             ('Allow', 'ALL'),
             ('Allow-Ranges', 'bytes'),
             ('Content-Length', '0'),
-            ('Content-Type', 'text/html'),
+            ('Content-Type', 'text/xml; charset="utf-8"'),
             ('DAV', '1,2'),
         ])
 
@@ -314,7 +314,7 @@ class TestView(TestCase):
         self.assertEqual(sorted(resp.items()), [
             ('Allow', 'ALL'),
             ('Content-Length', '0'),
-            ('Content-Type', 'text/html'),
+            ('Content-Type', 'text/xml; charset="utf-8"'),
             ('DAV', '1,2'),
         ])
 
@@ -325,36 +325,48 @@ class TestView(TestCase):
         resp = v.get(None, path, acl_class=FullAcl)
         self.assertEqual(resp['Etag'], "0" * 40)
         self.assertEqual(resp['Content-Type'], "text/plain")
-        self.assertEqual(resp['Last-Modified'], "Wed, 24 Dec 2014 06:00:00 GMT")
-        self.assertEqual(resp.content, "C" * 42)
+        self.assertEqual(resp['Last-Modified'], "Wed, 24 Dec 2014 06:00:00 +0000")
+        if sys.version_info < (3, 0, 0): #py2
+            self.assertEqual(resp.content, "C" * 42)
+        else:
+            self.assertEqual(resp.content.decode('utf-8'), "C" * 42)
 
-    @patch('djangodav.views.render_to_response', Mock(return_value=HttpResponse('listing')))
+    @patch('djangodav.views.render', Mock(return_value=HttpResponse('listing')))
     def test_head_object(self):
         path = '/object.txt'
         v = DavView(path=path, base_url='/base', _allowed_methods=Mock(return_value=['ALL']), acl_class=FullAcl)
         v.__dict__['resource'] = MockObject(path)
         resp = v.head(None, path)
         self.assertEqual("text/plain", resp['Content-Type'])
-        self.assertEqual("Wed, 24 Dec 2014 06:00:00 GMT", resp['Last-Modified'])
-        self.assertEqual("", resp.content)
+        self.assertEqual("Wed, 24 Dec 2014 06:00:00 +0000", resp['Last-Modified'])
+        if sys.version_info < (3, 0, 0): #py2
+            self.assertEqual("", resp.content)
+        else:
+            self.assertEqual("", resp.content.decode('utf-8'))
         self.assertEqual("0", resp['Content-Length'])
 
-    @patch('djangodav.views.views.render_to_response', Mock(return_value=HttpResponse('listing')))
+    @patch('djangodav.views.views.render', Mock(return_value=HttpResponse('listing')))
     def test_get_collection(self):
         path = '/collection/'
         v = DavView(path=path, acl_class=FullAcl, base_url='/base', _allowed_methods=Mock(return_value=['ALL']))
         v.__dict__['resource'] = MockCollection(path)
         resp = v.get(None, path)
-        self.assertEqual("listing", resp.content)
-        self.assertEqual("Wed, 24 Dec 2014 06:00:00 GMT", resp['Last-Modified'])
+        if sys.version_info < (3, 0, 0): #py2
+            self.assertEqual("listing", resp.content)
+        else:
+            self.assertEqual("listing", resp.content.decode('utf-8'))
+        self.assertEqual("Wed, 24 Dec 2014 06:00:00 +0000", resp['Last-Modified'])
 
     def test_head_collection(self):
         path = '/collection/'
         v = DavView(path=path, acl_class=FullAcl, base_url='/base', _allowed_methods=Mock(return_value=['ALL']))
         v.__dict__['resource'] = MockCollection(path)
         resp = v.head(None, path)
-        self.assertEqual("", resp.content)
-        self.assertEqual("Wed, 24 Dec 2014 06:00:00 GMT", resp['Last-Modified'])
+        if sys.version_info < (3, 0, 0): #py2
+            self.assertEqual("", resp.content)
+        else:
+            self.assertEqual("", resp.content.decode('utf-8'))
+        self.assertEqual("Wed, 24 Dec 2014 06:00:00 +0000", resp['Last-Modified'])
         self.assertEqual("0", resp['Content-Length'])
 
     def test_put_new(self):
@@ -385,7 +397,7 @@ class TestView(TestCase):
         request = HttpRequest()
         resp = v.put(request, path)
         self.assertFalse(self.sub_collection.write.called)
-        self.assertEqual(403, resp.status_code)
+        self.assertEqual(405, resp.status_code)
 
     def test_mkcol_new(self):
         path = '/collection/missing_sub_collection'
@@ -433,9 +445,8 @@ class TestView(TestCase):
         v.__dict__['resource'] = target
         request = HttpRequest()
         target.delete = Mock()
-        resp = v.delete(request, target.get_path())
+        self.assertRaises(Http404, v.delete, request, target.get_path())
         self.assertFalse(target.delete.called)
-        self.assertEqual(404, resp.status_code)
 
     def test_copy_new(self):
         src = self.sub_object
@@ -445,6 +456,7 @@ class TestView(TestCase):
         request.META['HTTP_DESTINATION'] = "http://testserver%s" % dst.get_path()
         request.META['SERVER_NAME'] = 'testserver'
         request.META['SERVER_PORT'] = '80'
+        request.META['HTTP_DEPTH'] = 'infinity'
         v = DavView(base_url='http://testserver', request=request, path=src.get_path(), acl_class=FullAcl, resource_class=Mock(), lock_class=DummyLock)
         v.resource_class = Mock(return_value=dst)
         v.__dict__['resource'] = src
@@ -461,6 +473,7 @@ class TestView(TestCase):
         request.META['HTTP_DESTINATION'] = "http://testserver%s" % dst.get_escaped_path()
         request.META['SERVER_NAME'] = 'testserver'
         request.META['SERVER_PORT'] = '80'
+        request.META['HTTP_DEPTH'] = 'infinity'
         v = DavView(base_url='http://testserver', request=request, path=src.get_path(), acl_class=FullAcl, resource_class=Mock(), lock_class=DummyLock)
         v.resource_class = Mock(return_value=dst)
         v.__dict__['resource'] = src
